@@ -1,0 +1,281 @@
+# Description:
+#   - Simple snippets and examples
+# Author:
+#   - Darko Drazovic
+#     - LinkedIn: https://www.linkedin.com/in/darkodrazovic
+#     - Personal: https://darkodrazovic.in.rs
+#     - Blog: https://kompjuteras.com
+#     - GitHub: https://github.com/kompjuteras
+
+- name: Ansible examples
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  ignore_errors: yes
+
+  tasks:
+
+    - name: Check OS version on systems
+      debug:
+        msg:
+          - "Hostname: {{ inventory_hostname }}"
+          - "Distribution: {{ ansible_distribution }}"
+          - "Major version: {{ ansible_distribution_major_version|int }}"
+          - "Full version: {{ ansible_distribution_version }}"
+          - "OS family: {{ ansible_os_family }}"
+          - "Main IP: {{ ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) }}"
+      tags: INFO
+
+    - name: For now this hardening support only SLES12+, RHEL6-8, CentOS6-8
+      assert:
+        that:
+          - ( ansible_distribution == 'RedHat'   and ( ansible_distribution_major_version == '6'  )) or
+            ( ansible_distribution == 'RedHat'   and ( ansible_distribution_major_version == '7'  )) or
+            ( ansible_distribution == 'RedHat'   and ( ansible_distribution_major_version == '8'  )) or
+            ( ansible_distribution == 'CentOS'   and ( ansible_distribution_major_version == '6'  )) or
+            ( ansible_distribution == 'CentOS'   and ( ansible_distribution_major_version == '7'  )) or
+            ( ansible_distribution == 'CentOS'   and ( ansible_distribution_major_version == '8'  )) or
+            ( ansible_distribution == 'SLES_SAP' and ( ansible_distribution_major_version == '12' )) or
+            ( ansible_distribution == 'SLES_SAP' and ( ansible_distribution_major_version == '15' )) or
+            ( ansible_distribution == 'Suse'     and ( ansible_distribution_major_version == '12' )) or
+            ( ansible_distribution == 'Suse'     and ( ansible_distribution_major_version == '15' ))
+        fail_msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} is not supported, host will be skipped"
+        success_msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} is supported"
+      ignore_errors: false
+
+    - name: Check does main IP is in some CIDR (focus on when)
+      debug: msg="{{ ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) }} belongs to CIDR 10.0.2.0/24"
+      when: ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) | ipaddr('10.0.2.0/24') | ipaddr('bool')
+      tags: IP_BELONG_TO_CIDR
+
+    - name: Check is https://google.com visible from the server
+      shell: timeout 10 curl -I https://google.com --insecure &>/dev/null
+      changed_when: False
+
+    - name: Check does folder /home exists
+      stat:
+        path: '/home'
+      register: folder_check
+      failed_when: ( not folder_check.stat.exists ) or ( not folder_check.stat.isdir )
+
+    # Like you runs: mkdir -p
+    - name: Create a directory if it does not exist
+      file:
+        path: /var/some_directory/other/blab
+        state: directory
+        mode: '0755'
+      tags: CREATE_DIR
+
+    - name: Create a login user (username zodra)
+      user:
+        name: zodra
+        comment: Дарко Дражовић - Жодра
+        # password: "{{ 'PasswordHere' | password_hash('sha512') }}" # this can be used but allways will be status: changed
+        # Generate hash: python3 -c "import crypt;print(crypt.crypt(input('Pass: '), crypt.mksalt(crypt.METHOD_SHA512)))"
+        password: $6$DFNxnrLdLh0K6zuD$5kxrKsbxQyVYH/KnD2YkTYR1E/aCta5ZFRZtwx0NiePty4ai8BcDlgfbFrVnoUeZX6aD0SPCMbpNOsjSWPn9a1
+        update_password: always
+        state: present
+        shell: /bin/bash
+        system: no
+        createhome: yes
+        home: /home/zodra_home_folder
+      tags: CREATE_USER
+
+    # If we dont check does user exists and try to change password / Ansible will create user with that password, so
+    # its better to check first does user exists
+    - name: Change password for the user if exists
+      block:
+        - name: Set fact for user to avoid error
+          set_fact:
+            uname: "root"
+        - name: Check does user {{ uname }} exists
+          getent:
+            database: passwd
+            key: "{{ uname }}"
+          register: check_user
+        - name: Update password if user {{ uname }} exists
+          user:
+            name: '{{ uname }}'
+            # password: "{{ 'PasswordHere' | password_hash('sha512') }}" # this can be used but allways will be status: changed
+            # Generate hash: python3 -c "import crypt;print(crypt.crypt(input('Pass: '), crypt.mksalt(crypt.METHOD_SHA512)))"
+            password: $6$178mDqnoOaC0L1fJ$s.oqJHyg470vSxlbynMmbLXORrrELW41BwBShMuKW3UaUWCaYJ4Uk7CAtx/QP3vCA54mM5ihpoItP9mmn9PLP.
+          when: not check_user.failed
+      tags: CHANGE_PASSWORD
+
+    # It will create backup files like /etc/hosts-20201229T204314
+    - name: Backup some file
+      copy:
+        src: '{{ item }}'
+        dest: '{{ item }}-{{ ansible_date_time.iso8601_basic_short }}'
+        remote_src: yes
+      with_items:
+        - /etc/profile
+        - /etc/hosts
+      tags: BACKUP_FILE
+
+    # Install multiple packages with package module
+    - name: Install a list of packages if not already installed
+      package:
+        name:
+         - nc
+         - bash-completion*
+         - unzip
+        state: present # present, latest, absent, installed
+      tags: PACKAGE_MODULE
+
+    # Show output from some command on remote host
+    - name: Show output from some command
+      block:
+        - name: Run command on remote host
+          shell: uptime ; cat /etc/hosts
+          register: output
+        - name: Display output
+          debug: msg="{{ output.stdout_lines }}"
+      tags: OUTPUT
+
+    - name: Create file with some content (it overwrite file if exists)
+      copy:
+        dest: "/tmp/example.txt"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          dog1
+           tiger
+          email = aca\.blabla()*^*(&^&#@^%$@)_
+          kraj
+      tags: CREATE_FILE
+
+    # Check does some service running
+    - name: Setup firewalld if running
+      block:
+        - name: Get service facts
+          service_facts:
+        - debug:
+            msg: "Service firewalld.service is running"
+          when: ansible_facts.services['firewalld.service'].state == "running"
+      tags: CHECK_SERVICE
+
+
+    # Open http and https on firewalld
+    - name: Setup firewalld if running
+      block:
+        - name: Get service facts
+          service_facts:
+        - name: Open http and https on Firewalld
+          firewalld:
+            # zone: public #--> Default zone
+            service: "{{ item }}"
+            permanent: yes
+            immediate: yes
+            state: enabled
+          loop:
+            - https
+            - http
+            - mysql
+          when: ansible_facts.services['firewalld.service'].state == "running"
+        # Open some specific port and protocol on firewalld if running
+        - name: Firewalld to open port 1111/tcp
+          firewalld:
+            port: 1111/tcp
+            immediate: yes
+            permanent: yes
+            state: enabled
+          when: ansible_facts.services['firewalld.service'].state == "running"
+      tags: FIREWALLD_SERVICE
+
+    # Start and enable some service
+    - name: Start and enable httpd service
+      service:
+        name: httpd
+        state: started # started, stopped, restarted, reloaded
+        enabled: yes
+      tags: SERVICED
+
+    - name: Add new lines into fstab
+      lineinfile:
+        dest: /tmp/fstab
+        line: "{{ item.line }}"
+        create: yes
+      with_items:
+        - { line: 'line1' }
+        - { line: 'line2' }
+        - { line: 'blabla' }
+      tags: LINEINFILE
+
+    - name: Check is system supported (Red Hat 7 only)
+      debug:
+        msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} is not supported OS for this play"
+      failed_when: >
+        ansible_distribution != "RedHat" or
+        ( ansible_distribution == "RedHat" and ansible_distribution_major_version|int != 7 )
+      when:
+        ansible_distribution != "RedHat" or
+        ( ansible_distribution == "RedHat" and ansible_distribution_major_version|int != 7 )
+      tags: SUPPORTED_OS
+
+    - name: Check do we have 2GB free on /home
+      shell: set -o pipefail && df -PBG /home | awk 'FNR == 2 {print ($4+1)}'
+      register: df_check
+      failed_when: df_check.stdout|int < 2
+      changed_when: False
+
+    - name: Setup cronjob
+      cron:
+        name: "Synchronize Red Hat packages"
+        minute: "0"
+        hour: "3"
+        weekday: "3"
+        job: "/root/SCRIPTS/reposync-mirror.sh &>> /var/log/reposync-mirror.log"
+
+    - name: Ensure permissions on crontab directories
+      file:
+        path: "{{ item }}"
+        owner: root
+        group: root
+        mode: 0700
+      loop:
+          - /etc/cron.hourly
+          - /etc/cron.daily
+          - /etc/cron.weekly
+          - /etc/cron.monthly
+          - /etc/cron.d
+
+    - name: Extract something from your local Ansible server to remote machine
+      unarchive:
+        src: files/rkhunter/rkhunter.tar.gz
+        dest: /tmp/
+
+    - name: Add some text block to some file
+      blockinfile:
+        path: /etc/bashrc
+        marker: "########## {mark} Disable the storage of Bash History ##########"
+        backup: yes
+        block: |
+          # export HISTFILESIZE=0
+          # unset HISTFILE
+
+    - name: Set kernel parameters
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        reload: yes
+        state: present
+        sysctl_set: yes
+      loop:
+        - { name: 'fs.suid_dumpable', value: '0' }
+        - { name: 'kernel.core_uses_pid', value: '1' }
+        - { name: 'kernel.ctrl-alt-del', value: '0' }
+
+    - name: Check is some package installed
+      block:
+        - name: Gather the package facts
+          package_facts:
+            manager: auto
+        - name: Check is package opendkim installed
+          assert:
+            that: "'parted' in ansible_facts.packages"
+            fail_msg: "Package parted is not installed, this host will be skipped"
+            success_msg: "Package parted is installed"
+          ignore_errors: false
